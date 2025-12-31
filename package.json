@@ -1,7 +1,9 @@
 {
   "name": "create-legal-app",
   "version": "0.1.0",
-  "private": true,
+  "description": "The Agent-Optimized Legal Tech Starter Kit",
+  "private": false,
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
