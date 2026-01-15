@@ -2,9 +2,15 @@
  * Document Processing Pipeline
  *
  * Handles the full document processing flow:
- * Upload → OCR → Chunking → Embedding → Ready for search
+ * Upload → Text Extraction (OCR or direct) → Chunking → Embedding → Ready for search
+ *
+ * File type handling:
+ * - Plain text (.txt): Direct read, no processing needed
+ * - DOCX (.docx): Client-side extraction with mammoth.js (no API cost)
+ * - PDF, images: OCR via Case.dev API
  */
 
+import mammoth from "mammoth";
 import {
   getDocument,
   updateDocument,
@@ -65,7 +71,7 @@ export async function processDocument(
   };
 
   try {
-    // Stage 1: OCR
+    // Stage 1: Text Extraction (OCR for PDFs/images, direct extraction for DOCX/text)
     updateProgress("ocr", 0);
     await updateDocument(documentId, { status: "ocr" });
 
@@ -76,7 +82,7 @@ export async function processDocument(
       status: "processing",
     });
 
-    const extractedText = await performOCR(file, (p) => updateProgress("ocr", p));
+    const extractedText = await extractText(file, (p) => updateProgress("ocr", p));
 
     await updateDocument(documentId, { extractedText });
     await updateProcessingJob(ocrJob.id, { status: "completed", completedAt: new Date() });
@@ -147,16 +153,99 @@ function checkLimitsOrThrow(): void {
   }
 }
 
-async function performOCR(file: File, onProgress: (progress: number) => void): Promise<string> {
-  // Check if it's a text file - no OCR needed
-  if (file.type === "text/plain") {
-    const text = await file.text();
-    onProgress(100);
-    return text;
-  }
+// File types that require OCR (images and PDFs)
+const OCR_REQUIRED_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "image/tiff",
+  "image/bmp",
+]);
 
+// DOCX MIME types
+const DOCX_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+
+function getFileTypeCategory(file: File): "text" | "docx" | "ocr" {
+  // Check by MIME type first
+  if (file.type === "text/plain") return "text";
+  if (DOCX_TYPES.has(file.type)) return "docx";
+  if (OCR_REQUIRED_TYPES.has(file.type)) return "ocr";
+
+  // Fallback to extension check
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  if (ext === "txt") return "text";
+  if (ext === "docx") return "docx";
+  if (["pdf", "png", "jpg", "jpeg", "gif", "webp", "tiff", "bmp"].includes(ext || "")) return "ocr";
+
+  // Default to OCR for unknown types
+  return "ocr";
+}
+
+/**
+ * Extract text from a file using the appropriate method based on file type
+ */
+async function extractText(file: File, onProgress: (progress: number) => void): Promise<string> {
+  const fileType = getFileTypeCategory(file);
+  console.log(`[Pipeline] Extracting text from ${file.name} (type: ${fileType})`);
+
+  switch (fileType) {
+    case "text":
+      return extractTextFromPlainText(file, onProgress);
+    case "docx":
+      return extractTextFromDocx(file, onProgress);
+    case "ocr":
+      return extractTextViaOCR(file, onProgress);
+  }
+}
+
+/**
+ * Extract text from plain text files
+ */
+async function extractTextFromPlainText(file: File, onProgress: (progress: number) => void): Promise<string> {
+  const text = await file.text();
+  onProgress(100);
+  return text;
+}
+
+/**
+ * Extract text from DOCX files using mammoth.js (client-side, no API cost)
+ */
+async function extractTextFromDocx(file: File, onProgress: (progress: number) => void): Promise<string> {
+  console.log("[Pipeline] Extracting text from DOCX using mammoth.js");
+  onProgress(10);
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    onProgress(30);
+
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    onProgress(90);
+
+    if (result.messages.length > 0) {
+      console.log("[Pipeline] Mammoth messages:", result.messages);
+    }
+
+    onProgress(100);
+    return result.value;
+  } catch (error) {
+    console.error("[Pipeline] DOCX extraction failed:", error);
+    throw new Error(`Failed to extract text from DOCX: ${error instanceof Error ? error.message : "Unknown error"}`);
+  }
+}
+
+/**
+ * Extract text via OCR API (for PDFs and images)
+ */
+async function extractTextViaOCR(file: File, onProgress: (progress: number) => void): Promise<string> {
   // Check usage limits before making API call
   checkLimitsOrThrow();
+
+  console.log("[Pipeline] Submitting to OCR API:", file.name);
 
   // Submit OCR job
   const formData = new FormData();
@@ -173,19 +262,30 @@ async function performOCR(file: File, onProgress: (progress: number) => void): P
     throw new Error(error.error || "OCR submission failed");
   }
 
-  const { jobId } = await submitResponse.json();
+  const { jobId, statusUrl, textUrl } = await submitResponse.json();
+  console.log("[Pipeline] OCR job submitted - jobId:", jobId, "statusUrl:", statusUrl);
   onProgress(10);
 
-  // Poll for completion
+  // Poll for completion with stuck job detection
   const startTime = Date.now();
   let progress = 10;
+  let lastStatus = "";
+  let lastChunksCompleted = -1;
+  let stuckCount = 0;
+  const MAX_STUCK_POLLS = 30; // If no progress for 30 polls (60 seconds), consider stuck
 
   while (Date.now() - startTime < OCR_MAX_WAIT) {
     await sleep(OCR_POLL_INTERVAL);
 
-    const statusResponse = await fetch(`/api/ocr/status/${jobId}`);
+    // Pass statusUrl and textUrl as query parameters
+    const statusParams = new URLSearchParams();
+    if (statusUrl) statusParams.set("statusUrl", statusUrl);
+    if (textUrl) statusParams.set("textUrl", textUrl);
+
+    const statusResponse = await fetch(`/api/ocr/status/${jobId}?${statusParams.toString()}`);
     if (!statusResponse.ok) {
-      throw new Error("Failed to check OCR status");
+      const errorData = await statusResponse.json().catch(() => ({}));
+      throw new Error(errorData.error || "Failed to check OCR status");
     }
 
     const status = await statusResponse.json();
@@ -203,8 +303,32 @@ async function performOCR(file: File, onProgress: (progress: number) => void): P
       throw new Error(status.error || "OCR processing failed");
     }
 
+    // Detect stuck jobs - if neither status nor chunks_completed has changed for too long
+    const currentStatus = status.status || "";
+    const chunksCompleted = status.chunksCompleted ?? status.chunks_completed ?? 0;
+    const chunksProcessing = status.chunksProcessing ?? status.chunks_processing ?? 0;
+
+    // Consider progress if: status changed, chunks completed changed, or chunks are being processed
+    const hasProgress = currentStatus !== lastStatus
+      || chunksCompleted !== lastChunksCompleted
+      || chunksProcessing > 0;
+
+    if (!hasProgress) {
+      stuckCount++;
+      if (stuckCount % 10 === 0) { // Log every 10 polls (20 seconds)
+        console.log(`[Pipeline] OCR job waiting (${stuckCount}/${MAX_STUCK_POLLS}) - status: ${currentStatus}, chunks: ${chunksCompleted}/${status.chunk_count || 0}`);
+      }
+      if (stuckCount >= MAX_STUCK_POLLS) {
+        throw new Error("OCR job appears stuck - the service may be unable to access the document. Please try again.");
+      }
+    } else {
+      stuckCount = 0; // Reset if progress was made
+      lastStatus = currentStatus;
+      lastChunksCompleted = chunksCompleted;
+    }
+
     // Update progress
-    progress = Math.min(progress + 10, 90);
+    progress = Math.min(progress + 5, 90);
     onProgress(progress);
   }
 

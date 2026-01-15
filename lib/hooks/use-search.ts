@@ -2,8 +2,8 @@
 
 import { useState, useCallback } from "react";
 import { semanticSearch } from "@/lib/vector-store";
-import { createSearchHistory } from "@/lib/storage/discovery-db";
-import type { SearchResult } from "@/types/discovery";
+import { createSearchHistory, getSearchHistoryById } from "@/lib/storage/discovery-db";
+import type { SearchResult, SearchHistory } from "@/types/discovery";
 
 interface UseSearchResult {
   query: string;
@@ -12,6 +12,7 @@ interface UseSearchResult {
   isSearching: boolean;
   error: string | null;
   search: (searchQuery: string) => Promise<void>;
+  loadPreviousSearch: (searchId: string) => Promise<void>;
   clearResults: () => void;
 }
 
@@ -65,12 +66,13 @@ export function useSearch(caseId: string): UseSearchResult {
         searchedAt,
       });
 
-      // Save to search history
+      // Save to search history with results for replay
       await createSearchHistory({
         caseId,
         query: searchQuery,
         resultCount: matches.length,
         searchedAt,
+        results: matches,
       });
     } catch (err) {
       console.error("Search failed:", err);
@@ -79,6 +81,41 @@ export function useSearch(caseId: string): UseSearchResult {
       setIsSearching(false);
     }
   }, [caseId]);
+
+  // Load a previous search from history
+  const loadPreviousSearch = useCallback(async (searchId: string) => {
+    try {
+      setIsSearching(true);
+      setError(null);
+
+      const history = await getSearchHistoryById(searchId);
+
+      if (!history) {
+        throw new Error("Search not found");
+      }
+
+      if (!history.results || history.results.length === 0) {
+        // No stored results, re-run the search
+        await search(history.query);
+        return;
+      }
+
+      // Load the stored results
+      setQuery(history.query);
+      setResults({
+        query: history.query,
+        caseId: history.caseId,
+        matches: history.results,
+        totalMatches: history.resultCount,
+        searchedAt: history.searchedAt,
+      });
+    } catch (err) {
+      console.error("Failed to load previous search:", err);
+      setError(err instanceof Error ? err.message : "Failed to load search");
+    } finally {
+      setIsSearching(false);
+    }
+  }, [caseId, search]);
 
   const clearResults = useCallback(() => {
     setResults(null);
@@ -93,6 +130,7 @@ export function useSearch(caseId: string): UseSearchResult {
     isSearching,
     error,
     search,
+    loadPreviousSearch,
     clearResults,
   };
 }

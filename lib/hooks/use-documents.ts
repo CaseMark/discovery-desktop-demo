@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getDocumentsByCase,
   createDocument,
@@ -14,6 +14,9 @@ import type { Document, ProcessingJob, UploadProgress } from "@/types/discovery"
 // Local user ID for IndexedDB isolation
 const LOCAL_USER_ID = "local-user";
 
+// Statuses that indicate a document is still being processed
+const PROCESSING_STATUSES = new Set(["pending", "ocr", "chunking", "embedding"]);
+
 interface UseDocumentsResult {
   documents: Document[];
   isLoading: boolean;
@@ -21,7 +24,7 @@ interface UseDocumentsResult {
   uploadProgress: Map<string, UploadProgress>;
   uploadFiles: (files: File[]) => Promise<void>;
   deleteDocument: (documentId: string) => Promise<void>;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<Document[]>;
 }
 
 export function useDocuments(caseId: string): UseDocumentsResult {
@@ -30,6 +33,9 @@ export function useDocuments(caseId: string): UseDocumentsResult {
   const [error, setError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<Map<string, UploadProgress>>(new Map());
 
+  // Track active processing document IDs to avoid duplicate processing
+  const activeProcessingRef = useRef<Set<string>>(new Set());
+
   // Load documents for case
   const loadDocuments = useCallback(async () => {
     try {
@@ -37,19 +43,50 @@ export function useDocuments(caseId: string): UseDocumentsResult {
       setError(null);
       const docs = await getDocumentsByCase(caseId);
       setDocuments(docs);
+      return docs;
     } catch (err) {
       console.error("Failed to load documents:", err);
       setError("Failed to load documents");
+      return [];
     } finally {
       setIsLoading(false);
     }
   }, [caseId]);
 
+  // Initial load
   useEffect(() => {
     if (caseId) {
       loadDocuments();
     }
   }, [caseId, loadDocuments]);
+
+  // Poll for status updates when there are documents with processing status
+  useEffect(() => {
+    // Check if any documents are in processing state (from DB, not from uploadProgress)
+    const processingDocs = documents.filter(
+      (doc) => PROCESSING_STATUSES.has(doc.status) && !activeProcessingRef.current.has(doc.id)
+    );
+
+    if (processingDocs.length === 0) return;
+
+    // Poll every 2 seconds to check if processing completed
+    const pollInterval = setInterval(async () => {
+      const freshDocs = await getDocumentsByCase(caseId);
+      const stillProcessing = freshDocs.some(
+        (doc) => PROCESSING_STATUSES.has(doc.status) && !activeProcessingRef.current.has(doc.id)
+      );
+
+      // Update documents state with fresh data
+      setDocuments(freshDocs);
+
+      // If no more processing docs (from DB), stop polling
+      if (!stillProcessing) {
+        clearInterval(pollInterval);
+      }
+    }, 2000);
+
+    return () => clearInterval(pollInterval);
+  }, [documents, caseId]);
 
   // Upload files
   const uploadFiles = useCallback(async (files: File[]) => {
@@ -64,7 +101,11 @@ export function useDocuments(caseId: string): UseDocumentsResult {
         fileSize: file.size,
       });
 
-      // Initialize progress tracking
+      // Track this document as actively processing
+      activeProcessingRef.current.add(doc.id);
+
+      // Initialize progress tracking - document shows in "Processing" section
+      // until complete, then moves to "Documents" section via loadDocuments()
       setUploadProgress((prev) => {
         const next = new Map(prev);
         next.set(doc.id, {
@@ -76,9 +117,6 @@ export function useDocuments(caseId: string): UseDocumentsResult {
         return next;
       });
 
-      // Add to documents list
-      setDocuments((prev) => [doc, ...prev]);
-
       // Start processing pipeline
       try {
         await processDocument(doc.id, file, (progress) => {
@@ -87,30 +125,23 @@ export function useDocuments(caseId: string): UseDocumentsResult {
             next.set(doc.id, progress);
             return next;
           });
-
-          // Update document in list when status changes
-          if (progress.stage !== "pending") {
-            setDocuments((prev) =>
-              prev.map((d) =>
-                d.id === doc.id
-                  ? { ...d, status: progress.stage, errorMessage: progress.error }
-                  : d
-              )
-            );
-          }
         });
 
-        // Remove from progress tracking after completion
+        // Refresh documents from DB BEFORE removing from progress tracking
+        // This ensures the document has correct status when it transitions
+        // from the "Processing" section to the "Documents" section
+        await loadDocuments();
+
+        // Now remove from progress tracking - document will show in Documents list
+        activeProcessingRef.current.delete(doc.id);
         setUploadProgress((prev) => {
           const next = new Map(prev);
           next.delete(doc.id);
           return next;
         });
-
-        // Refresh to get final state
-        await loadDocuments();
       } catch (err) {
         console.error("Processing failed:", err);
+        activeProcessingRef.current.delete(doc.id);
         setUploadProgress((prev) => {
           const next = new Map(prev);
           next.set(doc.id, {

@@ -75,6 +75,8 @@ export function useUsageTrackedApi() {
     return trackedFetch<{
       jobId: string
       status: string
+      statusUrl: string
+      textUrl: string
     }>(
       '/api/ocr/process',
       {
@@ -84,7 +86,11 @@ export function useUsageTrackedApi() {
     )
   }
 
-  async function checkOcrStatus(jobId: string) {
+  async function checkOcrStatus(jobId: string, statusUrl: string, textUrl?: string) {
+    const params = new URLSearchParams()
+    params.set('statusUrl', statusUrl)
+    if (textUrl) params.set('textUrl', textUrl)
+
     return trackedFetch<{
       jobId: string
       status: string
@@ -92,7 +98,7 @@ export function useUsageTrackedApi() {
       pageCount?: number
       error?: string
     }>(
-      `/api/ocr/status/${jobId}`,
+      `/api/ocr/status/${jobId}?${params.toString()}`,
       { skipLimitCheck: true }, // Status checks don't consume resources
       (response) => ({
         ocrPages: response.status === 'completed' ? response.pageCount : undefined,

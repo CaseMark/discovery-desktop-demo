@@ -457,6 +457,10 @@ export async function getSearchHistoryByCase(caseId: string, limit: number = 10)
     .then((results) => results.slice(0, limit));
 }
 
+export async function getSearchHistoryById(id: string): Promise<SearchHistory | undefined> {
+  return db.searchHistory.get(id);
+}
+
 export async function deleteSearchHistory(id: string): Promise<void> {
   await db.searchHistory.delete(id);
 }

@@ -173,7 +173,7 @@ export default function CaseOverviewPage() {
                 {searchHistory.map((item, index) => (
                   <Link
                     key={item.id}
-                    href={`/cases/${caseId}/search`}
+                    href={`/cases/${caseId}/search?searchId=${item.id}`}
                     className={`flex items-center justify-between p-4 hover:bg-muted/50 transition-colors group ${
                       index !== searchHistory.length - 1 ? "border-b" : ""
                     }`}

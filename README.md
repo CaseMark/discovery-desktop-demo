@@ -12,7 +12,10 @@ Discovery Desktop is a browser-based document discovery application that enables
 
 ## Features
 
-- **Document Upload & OCR**: Upload PDFs and images for automatic text extraction via Case.dev's OCR API
+- **Smart Document Processing**: Automatic text extraction with format-aware handling
+  - **DOCX files**: Client-side extraction via mammoth.js (no API cost)
+  - **PDFs & images**: OCR processing via Case.dev API
+  - **Plain text**: Direct processing (no API cost)
 - **Semantic Search**: Find relevant document passages using AI-powered vector similarity search
 - **Case Management**: Organize documents into cases for structured discovery workflows
 - **Search History**: Track and revisit previous searches within each case
@@ -26,6 +29,7 @@ Discovery Desktop is a browser-based document discovery application that enables
 - **Styling**: [Tailwind CSS 4](https://tailwindcss.com) with custom legal-focused theme
 - **Typography**: [Instrument Serif](https://fonts.google.com/specimen/Instrument+Serif) (headings), [Inter](https://rsms.me/inter/) (body)
 - **Database**: IndexedDB via [Dexie.js](https://dexie.org) (client-side)
+- **Document Processing**: [mammoth.js](https://github.com/mwilliamson/mammoth.js) (DOCX extraction)
 - **File Storage**: [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) (production OCR uploads)
 - **AI Services**: [Case.dev](https://case.dev) APIs for OCR and embeddings
 - **Package Manager**: [Bun](https://bun.sh)

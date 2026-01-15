@@ -135,6 +135,7 @@ export interface SearchHistory {
   query: string;
   resultCount: number;
   searchedAt: Date;
+  results?: SearchMatch[];  // Stored search results for replay
 }
 
 export interface SearchMatch {

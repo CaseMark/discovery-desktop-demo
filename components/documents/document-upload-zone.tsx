@@ -86,7 +86,35 @@ export function DocumentUploadZone({ caseId, showDocuments = true }: DocumentUpl
     }
   };
 
+  // Statuses that indicate processing is in progress
+  const PROCESSING_STATUSES = new Set(["pending", "ocr", "chunking", "embedding"]);
+
+  // Active uploads from uploadProgress (fresh uploads with real-time progress)
   const activeUploads = Array.from(uploadProgress.values());
+  const activeUploadIds = new Set(uploadProgress.keys());
+
+  // Documents from DB that are still processing (orphaned from page refresh)
+  // but NOT already tracked in uploadProgress
+  const orphanedProcessingDocs = documents.filter(
+    (doc) => PROCESSING_STATUSES.has(doc.status) && !activeUploadIds.has(doc.id)
+  );
+
+  // Combine active uploads with orphaned processing docs for the Processing section
+  const allProcessingItems = [
+    ...activeUploads,
+    ...orphanedProcessingDocs.map((doc) => ({
+      documentId: doc.id,
+      fileName: doc.fileName,
+      stage: doc.status,
+      progress: doc.status === "pending" ? 0 : 50, // Show partial progress for orphaned docs
+      error: doc.errorMessage,
+    })),
+  ];
+
+  // Only show completed or error documents in the Documents section
+  const completedDocuments = documents.filter(
+    (doc) => !PROCESSING_STATUSES.has(doc.status) && !activeUploadIds.has(doc.id)
+  );
 
   return (
     <div className="space-y-4">
@@ -133,10 +161,10 @@ export function DocumentUploadZone({ caseId, showDocuments = true }: DocumentUpl
       </Card>
 
       {/* Active Uploads / Processing */}
-      {activeUploads.length > 0 && (
+      {allProcessingItems.length > 0 && (
         <div className="space-y-2">
           <h4 className="text-sm font-medium text-foreground">Processing</h4>
-          {activeUploads.map((upload) => (
+          {allProcessingItems.map((upload) => (
             <Card key={upload.documentId}>
               <CardContent className="py-3 flex items-center gap-4">
                 <div className="w-8 h-8  bg-muted flex items-center justify-center">
@@ -181,14 +209,14 @@ export function DocumentUploadZone({ caseId, showDocuments = true }: DocumentUpl
             <div className="text-center py-4 text-muted-foreground text-sm">
               Loading documents...
             </div>
-          ) : documents.length > 0 ? (
+          ) : completedDocuments.length > 0 ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-medium text-foreground">
-                  Documents ({documents.length})
+                  Documents ({completedDocuments.length})
                 </h4>
               </div>
-              {documents.map((doc) => (
+              {completedDocuments.map((doc) => (
                 <DocumentRow
                   key={doc.id}
                   document={doc}

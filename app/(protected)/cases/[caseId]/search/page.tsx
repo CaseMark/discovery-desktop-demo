@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { AppHeader } from "@/components/layout/app-header";
 import { CaseNav } from "@/components/layout/case-nav";
 import { useCases, useCurrentCase } from "@/lib/contexts/case-context";
@@ -12,15 +12,26 @@ import { MagnifyingGlass } from "@phosphor-icons/react";
 
 export default function SearchPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const caseId = params.caseId as string;
+  const searchId = searchParams.get("searchId");
   const { selectCase } = useCases();
   const { currentCase } = useCurrentCase();
-  const { query, setQuery, results, isSearching, error, search } = useSearch(caseId);
+  const { query, setQuery, results, isSearching, error, search, loadPreviousSearch } = useSearch(caseId);
   const [minScoreFilter, setMinScoreFilter] = useState(0);
+  const [hasLoadedPrevious, setHasLoadedPrevious] = useState(false);
 
   useEffect(() => {
     selectCase(caseId);
   }, [caseId, selectCase]);
+
+  // Load previous search if searchId is provided
+  useEffect(() => {
+    if (searchId && !hasLoadedPrevious) {
+      setHasLoadedPrevious(true);
+      loadPreviousSearch(searchId);
+    }
+  }, [searchId, hasLoadedPrevious, loadPreviousSearch]);
 
   const handleSearch = async (searchQuery: string) => {
     setQuery(searchQuery);

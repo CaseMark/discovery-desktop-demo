@@ -10,12 +10,14 @@ const CASEDEV_API_KEY = process.env.CASE_API_KEY;
 
 interface OCRSubmitResponse {
   jobId: string;
-  status: "queued" | "processing";
+  status: "queued" | "processing" | "pending";
+  statusUrl: string;
+  textUrl: string;
 }
 
 interface OCRStatusResponse {
   jobId: string;
-  status: "queued" | "processing" | "completed" | "failed";
+  status: "queued" | "processing" | "pending" | "completed" | "failed";
   text?: string;
   pageCount?: number;
   error?: string;
@@ -69,7 +71,6 @@ class CaseDevClient {
     }
 
     console.log("[CaseDev] Submitting OCR job for:", fileName);
-    console.log("[CaseDev] Document URL type:", documentUrl.startsWith("data:") ? "data URL" : "blob URL");
 
     const response = await fetch(`${this.baseUrl}/ocr/v1/process`, {
       method: "POST",
@@ -88,37 +89,121 @@ class CaseDevClient {
       throw new Error(`OCR submit failed: ${response.status} - ${error}`);
     }
 
-    return response.json();
+    const result = await response.json();
+
+    // Handle different response formats from the API
+    const jobId = result.id || result.jobId || result.job_id;
+    const status = result.status || "queued";
+
+    if (!jobId) {
+      console.error("[CaseDev] OCR response missing job ID:", result);
+      throw new Error("OCR API did not return a job ID");
+    }
+
+    // Construct our own URLs using the public API base URL
+    // The API returns internal URLs (vision.casemark.net) that aren't publicly accessible
+    // Internal pattern: /v1/ocr/{jobId} -> Public pattern: /ocr/v1/{jobId}
+    // Download endpoints require /download/ in the path: /ocr/v1/{jobId}/download/{format}
+    const statusUrl = `${this.baseUrl}/ocr/v1/${jobId}`;
+    const jsonUrl = `${this.baseUrl}/ocr/v1/${jobId}/download/json`;
+
+    console.log("[CaseDev] OCR job created:", jobId);
+
+    return {
+      jobId,
+      status: status as "queued" | "processing" | "pending",
+      statusUrl,
+      textUrl: jsonUrl, // Use JSON endpoint which contains extracted text
+    };
   }
 
   /**
-   * Check OCR job status
+   * Check OCR job status using the status URL from submit response
    */
-  async getOCRStatus(jobId: string): Promise<OCRStatusResponse> {
+  async getOCRStatus(statusUrl: string, textUrl?: string): Promise<OCRStatusResponse> {
     // If no API key, return mock response
     if (!this.apiKey) {
-      return this.mockOCRStatus(jobId);
+      return this.mockOCRStatus("mock");
     }
 
-    return this.request<OCRStatusResponse>(`/ocr/v1/status/${jobId}`);
+    // Validate statusUrl before making request
+    if (!statusUrl || statusUrl === "undefined") {
+      throw new Error("Invalid status URL provided to getOCRStatus");
+    }
+
+    const response = await fetch(statusUrl, {
+      headers: {
+        "Authorization": `Bearer ${this.apiKey}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OCR status check failed: ${response.status} - ${error}`);
+    }
+
+    const result = await response.json();
+    const jobId = (result.id || result.jobId || result.job_id) as string;
+    const status = (result.status || "processing") as OCRStatusResponse["status"];
+
+    // If completed and we have a text/json URL, fetch the extracted text
+    let text: string | undefined;
+    if (status === "completed" && textUrl) {
+      try {
+        const textResponse = await fetch(textUrl, {
+          headers: {
+            "Authorization": `Bearer ${this.apiKey}`,
+          },
+        });
+        if (textResponse.ok) {
+          const contentType = textResponse.headers.get("content-type") || "";
+
+          if (contentType.includes("application/json")) {
+            // JSON response - extract text from the OCR result structure
+            const jsonResult = await textResponse.json();
+
+            // The JSON result may have text in various locations
+            // Try common patterns: text, extracted_text, content, or pages[].text
+            text = jsonResult.text
+              || jsonResult.extracted_text
+              || jsonResult.content;
+
+            // If text is in pages array, concatenate all page texts
+            if (!text && jsonResult.pages && Array.isArray(jsonResult.pages)) {
+              text = jsonResult.pages
+                .map((page: { text?: string; content?: string }) => page.text || page.content || "")
+                .join("\n\n");
+            }
+          } else {
+            // Plain text response - use directly
+            text = await textResponse.text();
+          }
+        } else {
+          console.error("[CaseDev] OCR result fetch failed:", textResponse.status);
+        }
+      } catch (e) {
+        console.error("[CaseDev] Failed to fetch OCR result:", e);
+      }
+    }
+
+    // Normalize response format (handle snake_case vs camelCase)
+    return {
+      jobId,
+      status,
+      text: text || (result.text || result.extracted_text) as string | undefined,
+      pageCount: (result.pageCount || result.page_count) as number | undefined,
+      error: result.error as string | undefined,
+    };
   }
 
   /**
    * Generate embeddings for text chunks
    */
   async generateEmbeddings(texts: string[], model: string = "voyage-law-2"): Promise<EmbeddingResponse> {
-    console.log(`[CaseDev] generateEmbeddings called with ${texts.length} texts`);
-    console.log(`[CaseDev] API key configured: ${this.apiKey ? "yes (length: " + this.apiKey.length + ")" : "no"}`);
-    console.log(`[CaseDev] Base URL: ${this.baseUrl}`);
-
     // If no API key, use local deterministic embeddings
     if (!this.apiKey) {
-      console.log("[CaseDev] No API key - using local embeddings fallback");
       return this.localEmbeddings(texts, model);
     }
-
-    console.log(`[CaseDev] Calling external API: ${this.baseUrl}/llm/v1/embeddings`);
-    console.log(`[CaseDev] Request payload: { input: [${texts.length} texts], model: "${model}" }`);
 
     // Case.dev API expects "input" parameter per OpenAI embeddings spec
     const response = await this.request<Record<string, unknown>>("/llm/v1/embeddings", {
@@ -126,23 +211,9 @@ class CaseDevClient {
       body: JSON.stringify({ input: texts, model }),
     });
 
-    // Log the actual response structure for debugging
-    console.log("[CaseDev] Raw API response keys:", Object.keys(response));
-    console.log("[CaseDev] Raw API response structure:", JSON.stringify(response, (key, value) => {
-      // Truncate embedding arrays for readability
-      if (Array.isArray(value) && value.length > 0 && typeof value[0] === "number") {
-        return `[number array, length: ${value.length}]`;
-      }
-      if (Array.isArray(value) && value.length > 3) {
-        return `[array, length: ${value.length}, first item keys: ${value[0] ? Object.keys(value[0]) : "N/A"}]`;
-      }
-      return value;
-    }, 2));
-
     // Handle OpenAI-style response format (data array with embedding objects)
     const data = response.data as Array<{ embedding: number[]; index: number }> | undefined;
     if (data && Array.isArray(data)) {
-      console.log("[CaseDev] Detected OpenAI-style format with data array");
       // Sort by index to ensure correct ordering
       const sorted = [...data].sort((a, b) => a.index - b.index);
       return {
@@ -155,7 +226,6 @@ class CaseDevClient {
     // Handle direct embeddings array format (legacy)
     const embeddings = response.embeddings as number[][] | undefined;
     if (embeddings && Array.isArray(embeddings)) {
-      console.log("[CaseDev] Detected direct embeddings array format");
       return {
         embeddings: embeddings,
         model: (response.model as string) || model,
@@ -163,7 +233,6 @@ class CaseDevClient {
       };
     }
 
-    console.error("[CaseDev] Unrecognized response format. Response:", JSON.stringify(response, null, 2));
     throw new Error("Unexpected embedding API response format");
   }
 
@@ -172,9 +241,12 @@ class CaseDevClient {
   // ============================================================================
 
   private mockOCRSubmit(): OCRSubmitResponse {
+    const mockId = `mock-${Date.now()}`;
     return {
-      jobId: `mock-${Date.now()}`,
+      jobId: mockId,
       status: "queued",
+      statusUrl: `mock://status/${mockId}`,
+      textUrl: `mock://text/${mockId}`,
     };
   }
 

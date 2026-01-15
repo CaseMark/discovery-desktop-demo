@@ -7,15 +7,19 @@ export async function GET(
 ) {
   try {
     const { jobId } = await params;
+    const searchParams = request.nextUrl.searchParams;
+    const statusUrl = searchParams.get("statusUrl");
+    const textUrl = searchParams.get("textUrl");
 
-    if (!jobId) {
+    if (!statusUrl) {
       return NextResponse.json(
-        { error: "Job ID is required" },
+        { error: "Status URL is required" },
         { status: 400 }
       );
     }
 
-    const result = await caseDevClient.getOCRStatus(jobId);
+    console.log(`[OCR Status] Checking job ${jobId} at ${statusUrl}`);
+    const result = await caseDevClient.getOCRStatus(statusUrl, textUrl || undefined);
     return NextResponse.json(result);
   } catch (error) {
     console.error("OCR status error:", error);
