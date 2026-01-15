@@ -59,18 +59,17 @@ class CaseDevClient {
 
   /**
    * Submit a document for OCR processing
+   * @param documentUrl - URL to the document (Vercel Blob URL or data URL)
+   * @param fileName - Original file name
    */
-  async submitOCR(fileData: ArrayBuffer, fileName: string, fileType: string): Promise<OCRSubmitResponse> {
+  async submitOCR(documentUrl: string, fileName: string): Promise<OCRSubmitResponse> {
     // If no API key, return mock response
     if (!this.apiKey) {
       return this.mockOCRSubmit();
     }
 
-    // Convert ArrayBuffer to base64 for API submission
-    const base64Data = this.arrayBufferToBase64(fileData);
-    
-    // Create a data URL that the API can use as document_url
-    const documentUrl = `data:${fileType};base64,${base64Data}`;
+    console.log("[CaseDev] Submitting OCR job for:", fileName);
+    console.log("[CaseDev] Document URL type:", documentUrl.startsWith("data:") ? "data URL" : "blob URL");
 
     const response = await fetch(`${this.baseUrl}/ocr/v1/process`, {
       method: "POST",
@@ -90,18 +89,6 @@ class CaseDevClient {
     }
 
     return response.json();
-  }
-
-  /**
-   * Convert ArrayBuffer to base64 string
-   */
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
   }
 
   /**

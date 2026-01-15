@@ -26,6 +26,7 @@ Discovery Desktop is a browser-based document discovery application that enables
 - **Styling**: [Tailwind CSS 4](https://tailwindcss.com) with custom legal-focused theme
 - **Typography**: [Instrument Serif](https://fonts.google.com/specimen/Instrument+Serif) (headings), [Inter](https://rsms.me/inter/) (body)
 - **Database**: IndexedDB via [Dexie.js](https://dexie.org) (client-side)
+- **File Storage**: [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) (production OCR uploads)
 - **AI Services**: [Case.dev](https://case.dev) APIs for OCR and embeddings
 - **Package Manager**: [Bun](https://bun.sh)
 
@@ -48,6 +49,30 @@ Discovery Desktop uses **IndexedDB** for all client-side data storage, managed t
 | `embeddings` | Vector embeddings for semantic search |
 | `searchHistory` | Previous search queries per case |
 | `processingJobs` | OCR and embedding job status tracking |
+
+## Vercel Blob Configuration
+
+For production deployments, Discovery Desktop uses [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) to store uploaded documents temporarily during OCR processing. This is required because:
+
+- Large PDFs exceed request size limits when sent as base64 data URLs
+- The Case.dev OCR API needs a publicly accessible URL to fetch documents
+- Blob storage provides reliable, fast access for the OCR service
+
+### Setup
+
+1. Go to [Vercel Dashboard → Storage](https://vercel.com/dashboard/stores)
+2. Create a new Blob store
+3. Copy the `BLOB_READ_WRITE_TOKEN` to your environment variables
+
+### How it works
+
+1. User uploads a document
+2. Document is uploaded to Vercel Blob (`ocr-uploads/` folder)
+3. Blob returns a public URL
+4. URL is sent to Case.dev OCR API for processing
+5. OCR results are returned and stored in IndexedDB
+
+**Note:** In local development without a Blob token, the app falls back to base64 data URLs (suitable for small files).
 
 ## API Pricing
 
@@ -106,6 +131,10 @@ Configure your environment variables:
 # Case.dev API (get keys from https://console.case.dev)
 CASE_API_KEY=sk_case_...
 CASE_API_URL=https://api.case.dev
+
+# Vercel Blob (required for production OCR)
+# Create a blob store at https://vercel.com/dashboard/stores
+BLOB_READ_WRITE_TOKEN=vercel_blob_...
 
 # Demo limits (optional, defaults shown)
 NEXT_PUBLIC_DEMO_SESSION_HOURS=24
