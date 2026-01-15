@@ -33,6 +33,15 @@ export default function SearchPage() {
     }
   }, [searchId, hasLoadedPrevious, loadPreviousSearch]);
 
+  // Handle query param from suggested questions
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q && !hasLoadedPrevious && !searchId) {
+      setQuery(q);
+      search(q);
+    }
+  }, [searchParams, hasLoadedPrevious, searchId, setQuery, search]);
+
   const handleSearch = async (searchQuery: string) => {
     setQuery(searchQuery);
     if (searchQuery.trim()) {
