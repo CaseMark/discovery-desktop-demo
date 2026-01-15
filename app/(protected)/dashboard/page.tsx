@@ -12,10 +12,20 @@ import {
   MagnifyingGlass,
   Plus,
   ArrowRight,
+  DotsThreeVertical,
+  Trash,
+  Archive,
 } from "@phosphor-icons/react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 
 export default function DashboardPage() {
-  const { cases, isLoading, refreshCases } = useCases();
+  const { cases, isLoading, refreshCases, deleteCase, updateCase } = useCases();
 
   // Refresh case stats when navigating to dashboard
   useEffect(() => {
@@ -28,6 +38,18 @@ export default function DashboardPage() {
   const processingDocuments = cases.reduce((sum, c) => sum + c.processingCount, 0);
 
   const recentCases = cases.slice(0, 5);
+
+  const handleArchive = async (caseId: string, currentStatus: string) => {
+    await updateCase(caseId, {
+      status: currentStatus === "archived" ? "active" : "archived",
+    });
+  };
+
+  const handleDelete = async (caseId: string) => {
+    if (confirm("Are you sure you want to delete this case? This action cannot be undone.")) {
+      await deleteCase(caseId);
+    }
+  };
 
   return (
     <>
@@ -135,34 +157,70 @@ export default function DashboardPage() {
             ) : (
               <div className="space-y-2">
                 {recentCases.map((c) => (
-                  <Link key={c.id} href={`/cases/${c.id}`}>
-                    <Card className="hover:bg-muted/50 transition-colors cursor-pointer">
-                      <CardContent className="py-4 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-10 h-10  bg-muted flex items-center justify-center">
-                            <Briefcase
-                              size={20}
-                              className="text-muted-foreground"
-                            />
-                          </div>
-                          <div>
+                  <Card
+                    key={c.id}
+                    className="hover:bg-muted/50 transition-colors group"
+                  >
+                    <CardContent className="py-4 flex items-center justify-between">
+                      <Link
+                        href={`/cases/${c.id}`}
+                        className="flex items-center gap-4 flex-1"
+                      >
+                        <div className="w-10 h-10 bg-muted flex items-center justify-center">
+                          <Briefcase
+                            size={20}
+                            className="text-muted-foreground"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
                             <h4 className="font-medium text-foreground">
                               {c.name}
                             </h4>
-                            <p className="text-sm text-muted-foreground">
-                              {c.documentCount} documents
-                              {c.processingCount > 0 &&
-                                ` (${c.processingCount} processing)`}
-                            </p>
+                            {c.status === "archived" && (
+                              <span className="text-xs px-2 py-0.5 bg-muted text-muted-foreground">
+                                Archived
+                              </span>
+                            )}
                           </div>
+                          <p className="text-sm text-muted-foreground">
+                            {c.documentCount} documents
+                            {c.processingCount > 0 &&
+                              ` (${c.processingCount} processing)`}
+                          </p>
                         </div>
-                        <ArrowRight
-                          size={18}
-                          className="text-muted-foreground"
-                        />
-                      </CardContent>
-                    </Card>
-                  </Link>
+                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link href={`/cases/${c.id}`}>
+                          <Button variant="ghost" size="sm">
+                            Open
+                            <ArrowRight size={16} />
+                          </Button>
+                        </Link>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger className="inline-flex items-center justify-center p-2 hover:bg-muted transition-colors">
+                            <DotsThreeVertical size={18} />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => handleArchive(c.id, c.status)}
+                            >
+                              <Archive size={16} />
+                              {c.status === "archived" ? "Unarchive" : "Archive"}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onClick={() => handleDelete(c.id)}
+                              className="text-red-600"
+                            >
+                              <Trash size={16} />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </CardContent>
+                  </Card>
                 ))}
               </div>
             )}
